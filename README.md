@@ -24,6 +24,73 @@ This solution’s focus is **full lifecycle automation** so operations stay repe
 
 ---
 
+### End-to-end automation (one pipeline run)
+
+Full lifecycle from **trigger** through **policy**, **CAS / artifacts / allowlist**, **audited YAML snapshots**, and **load balancer enforcement**. Same stage logic on **GitHub Actions**, **Azure DevOps**, and **Cloud Build** ([`docs/pipeline.md`](docs/pipeline.md)).
+
+```mermaid
+flowchart TB
+  classDef cloud fill:#E8F0FE,stroke:#1967D2,stroke-width:2px
+  classDef gate fill:#E6F4EA,stroke:#0D652D,stroke-width:2px
+  classDef audit fill:#FEF7E0,stroke:#E37400,stroke-width:2px
+  classDef stop fill:#FCE8E6,stroke:#C5221F,stroke-width:2px
+
+  subgraph trig["① Trigger"]
+    P["CI: GitHub Actions · Azure DevOps · Cloud Build"]
+  end
+
+  subgraph snap1["② Snapshot — BEFORE mutations"]
+    B["trust-config-backup.sh"]
+    G1[("GCS · trustconfig/…/BEFORE-*.yaml")]
+    B --> G1
+  end
+
+  Q{"③ Operation — issue or revoke?"}
+
+  subgraph issuePath["Issue path — gated"]
+    V["validate-cert-request.sh — all policy rules"]
+    VF{Pass?}
+    V --> VF
+    VF -->|no| STOP(["Fail fast — no CAS, no allowlist change"])
+    VF -->|yes| I["issue-cert.sh — CSR + openssl"]
+    I --> CAS["Private CA — sign with template"]
+    CAS --> ART[("GCS issued PEM + Secret Manager private key")]
+    ART --> ADD["trust_config_allowlist.py — add leaf PEM"]
+    ADD --> CX["cleanup-expired on allowlist"]
+  end
+
+  subgraph revokePath["Revoke path"]
+    R["revoke-cert.sh — allowlist · GCS · Secret · CAS revoke"]
+    R --> RX["cleanup-expired on allowlist"]
+  end
+
+  subgraph snap2["④ Snapshot — AFTER mutations"]
+    A2["trust-config-backup.sh"]
+    G2[("GCS · trustconfig/…/AFTER-*.yaml")]
+    A2 --> G2
+  end
+
+  LB["⑤ mTLS at LB · Certificate Manager allowlist decides handshake"]
+
+  P --> B
+  G1 --> Q
+  Q -->|issue| V
+  Q -->|revoke| R
+  CX --> A2
+  RX --> A2
+  ADD -.-> LB
+  R -.-> LB
+
+  class B,G1,A2,G2 audit
+  class V,VF gate
+  class I,CAS,ART,ADD,R,LB cloud
+  class STOP stop
+```
+
+**Test mode:** validation and read-only checks still run; **CAS**, **GCS**, **Secret Manager**, and **allowlist** mutations are skipped (see [`docs/pipeline.md`](docs/pipeline.md)).
+
+---
+
 ### Diagram: trust anchor vs allowlist at load balancer
 
 See also [docs/trust-config.md](docs/trust-config.md) and [docs/architecture.md](docs/architecture.md).
@@ -129,7 +196,7 @@ Review with security and platform teams: **Secret Manager** usage, IAM in `cert-
 
 | Document | Contents |
 |----------|-----------|
-| [docs/diagrams.md](docs/diagrams.md) | **Diagram gallery**: positioning, CI matrix, issue/revoke state machines, validation gate, artifacts, recovery. |
+| [docs/diagrams.md](docs/diagrams.md) | **Diagram gallery**: positioning, CI matrix, issue/revoke state machines, validation gate, artifacts, recovery (README also has **end-to-end automation** above). |
 | [docs/setup-and-use.md](docs/setup-and-use.md) | **Step-by-step setup and run** (Terraform, CI, local validate). |
 | [docs/terraform.md](docs/terraform.md) | **Terraform** file layout, dependency graph, enterprise practices, outputs → pipelines. |
 | [docs/architecture.md](docs/architecture.md) | System context, **issuance sequence**, LB enforcement. |
