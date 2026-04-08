@@ -1,0 +1,196 @@
+parameters:
+  action: 'issue'
+  workloadApp: ''
+  workloadEnv: ''
+  workloadProjectId: ''
+  trustConfigName: ''
+  commonName: ''
+  organizationalUnit: ''
+  validityDays: 365
+  certificateId: ''
+  pkiProjectId: ''
+  pkiRegion: ''
+  caPoolId: ''
+  caId: ''
+  certTemplate: ''
+  storageBucket: ''
+  gcpServiceConnection: ''
+  allowedApps: ''
+  minValidityDays: 365
+  maxValidityDays: 730
+  maxValidityDaysProd: 548
+  maintWindowStartMonth: 11
+  maintWindowEndMonth: 1
+  maintWindowEndDay: 7
+  strictValidityEnvs: 'prod'
+  testMode: true
+
+stages:
+  - stage: PreBackup
+    displayName: Backup trust config (before)
+    jobs:
+      - job: backup_before
+        displayName: Export trust config
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+
+          - bash: |
+              set -euo pipefail
+              ROOT="$(Build.SourcesDirectory)"
+              chmod +x "${ROOT}/scripts/trust-config-backup.sh"
+              export WORKLOAD_PROJECT_ID="${{ parameters.workloadProjectId }}"
+              export WORKLOAD_APP="${{ parameters.workloadApp }}"
+              export WORKLOAD_ENV="${{ parameters.workloadEnv }}"
+              export STORAGE_BUCKET="${{ parameters.storageBucket }}"
+              TC="${{ parameters.trustConfigName }}"
+              export TRUST_CONFIG_NAME="${TC:-trust-config-${{ parameters.workloadApp }}-${{ parameters.workloadEnv }}}"
+              export PHASE="before"
+              TM='${{ parameters.testMode }}'
+              if [[ "${TM}" == "True" ]] || [[ "${TM}" == "true" ]]; then export TEST_MODE=true; else export TEST_MODE=false; fi
+              "${ROOT}/scripts/trust-config-backup.sh"
+            displayName: Trust config snapshot (BEFORE)
+
+  - stage: Validate
+    displayName: Policy checks
+    dependsOn: PreBackup
+    condition: and(succeeded(), eq('${{ parameters.action }}', 'issue'))
+    jobs:
+      - job: validate
+        displayName: validate-cert-request.sh
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              ROOT="$(Build.SourcesDirectory)"
+              chmod +x "${ROOT}/scripts/validate-cert-request.sh"
+              export WORKLOAD_APP="${{ parameters.workloadApp }}"
+              export WORKLOAD_ENV="${{ parameters.workloadEnv }}"
+              export COMMON_NAME="${{ parameters.commonName }}"
+              export ORGANIZATIONAL_UNIT="${{ parameters.organizationalUnit }}"
+              export VALIDITY_DAYS="${{ parameters.validityDays }}"
+              export MIN_VALIDITY_DAYS="${{ parameters.minValidityDays }}"
+              export MAX_VALIDITY_DAYS="${{ parameters.maxValidityDays }}"
+              export MAX_VALIDITY_DAYS_PROD="${{ parameters.maxValidityDaysProd }}"
+              export MAINT_WINDOW_START_MONTH="${{ parameters.maintWindowStartMonth }}"
+              export MAINT_WINDOW_END_MONTH="${{ parameters.maintWindowEndMonth }}"
+              export MAINT_WINDOW_END_DAY="${{ parameters.maintWindowEndDay }}"
+              export ALLOWED_APPS="${{ parameters.allowedApps }}"
+              export STRICT_VALIDITY_ENVS="${{ parameters.strictValidityEnvs }}"
+              "${ROOT}/scripts/validate-cert-request.sh"
+            displayName: Run validations
+
+  - stage: Issue
+    displayName: Issue certificate and activate allowlist
+    dependsOn: Validate
+    condition: and(succeeded(), eq('${{ parameters.action }}', 'issue'))
+    jobs:
+      - job: issue
+        displayName: Issue, Secret Manager, GCS, TrustConfig allowlist, cleanup
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              ROOT="$(Build.SourcesDirectory)"
+              python3 -m pip install -q -r "${ROOT}/scripts/requirements.txt"
+              chmod +x "${ROOT}/scripts/issue-cert.sh"
+              export PKI_PROJECT_ID="${{ parameters.pkiProjectId }}"
+              export PKI_REGION="${{ parameters.pkiRegion }}"
+              export CA_POOL_ID="${{ parameters.caPoolId }}"
+              export CA_ID="${{ parameters.caId }}"
+              export CERT_TEMPLATE="${{ parameters.certTemplate }}"
+              export COMMON_NAME="${{ parameters.commonName }}"
+              export ORGANIZATIONAL_UNIT="${{ parameters.organizationalUnit }}"
+              export VALIDITY_DAYS="${{ parameters.validityDays }}"
+              export STORAGE_BUCKET="${{ parameters.storageBucket }}"
+              export WORKLOAD_APP="${{ parameters.workloadApp }}"
+              export WORKLOAD_ENV="${{ parameters.workloadEnv }}"
+              export CAS_STATE_DIR="${ROOT}"
+              TM='${{ parameters.testMode }}'
+              if [[ "${TM}" == "True" ]] || [[ "${TM}" == "true" ]]; then export TEST_MODE=true; else export TEST_MODE=false; fi
+              "${ROOT}/scripts/issue-cert.sh"
+              if [[ "${TEST_MODE}" != "true" ]]; then
+                CERT_ID="$(cat "${ROOT}/.cas-lifecycle-cert-id")"
+                TC="${{ parameters.trustConfigName }}"
+                TC_NAME="${TC:-trust-config-${{ parameters.workloadApp }}-${{ parameters.workloadEnv }}}"
+                PEM_LOCAL="$(mktemp)"
+                trap 'rm -f "${PEM_LOCAL}"' EXIT
+                gsutil cp "gs://${{ parameters.storageBucket }}/certificates/${{ parameters.workloadApp }}/${{ parameters.workloadEnv }}/${CERT_ID}.pem" "${PEM_LOCAL}"
+                python3 "${ROOT}/scripts/trust_config_allowlist.py" add \
+                  --workload-project "${{ parameters.workloadProjectId }}" \
+                  --trust-config "${TC_NAME}" \
+                  --pem-file "${PEM_LOCAL}"
+                python3 "${ROOT}/scripts/trust_config_allowlist.py" cleanup-expired \
+                  --workload-project "${{ parameters.workloadProjectId }}" \
+                  --trust-config "${TC_NAME}"
+              fi
+            displayName: Issue, allowlist, cleanup
+
+  - stage: Revoke
+    displayName: Revoke certificate
+    dependsOn: PreBackup
+    condition: and(succeeded(), eq('${{ parameters.action }}', 'revoke'))
+    jobs:
+      - job: revoke
+        displayName: revoke-cert.sh
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              ROOT="$(Build.SourcesDirectory)"
+              python3 -m pip install -q -r "${ROOT}/scripts/requirements.txt"
+              chmod +x "${ROOT}/scripts/revoke-cert.sh"
+              export PKI_PROJECT_ID="${{ parameters.pkiProjectId }}"
+              export PKI_REGION="${{ parameters.pkiRegion }}"
+              export CA_POOL_ID="${{ parameters.caPoolId }}"
+              export CERTIFICATE_ID="${{ parameters.certificateId }}"
+              export STORAGE_BUCKET="${{ parameters.storageBucket }}"
+              export WORKLOAD_APP="${{ parameters.workloadApp }}"
+              export WORKLOAD_ENV="${{ parameters.workloadEnv }}"
+              export WORKLOAD_PROJECT_ID="${{ parameters.workloadProjectId }}"
+              TC="${{ parameters.trustConfigName }}"
+              export TRUST_CONFIG_NAME="${TC:-trust-config-${{ parameters.workloadApp }}-${{ parameters.workloadEnv }}}"
+              TM='${{ parameters.testMode }}'
+              if [[ "${TM}" == "True" ]] || [[ "${TM}" == "true" ]]; then export TEST_MODE=true; else export TEST_MODE=false; fi
+              "${ROOT}/scripts/revoke-cert.sh"
+            displayName: Revoke (allowlist, SM, GCS, CAS, cleanup)
+
+  - stage: PostBackup
+    displayName: Backup trust config (after)
+    dependsOn:
+      - Issue
+      - Revoke
+    condition: |
+      or(
+        eq(dependencies.Issue.result, 'Succeeded'),
+        eq(dependencies.Revoke.result, 'Succeeded')
+      )
+    jobs:
+      - job: backup_after
+        displayName: Export trust config after change
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              ROOT="$(Build.SourcesDirectory)"
+              chmod +x "${ROOT}/scripts/trust-config-backup.sh"
+              export WORKLOAD_PROJECT_ID="${{ parameters.workloadProjectId }}"
+              export WORKLOAD_APP="${{ parameters.workloadApp }}"
+              export WORKLOAD_ENV="${{ parameters.workloadEnv }}"
+              export STORAGE_BUCKET="${{ parameters.storageBucket }}"
+              TC="${{ parameters.trustConfigName }}"
+              export TRUST_CONFIG_NAME="${TC:-trust-config-${{ parameters.workloadApp }}-${{ parameters.workloadEnv }}}"
+              export PHASE="after"
+              TM='${{ parameters.testMode }}'
+              if [[ "${TM}" == "True" ]] || [[ "${TM}" == "true" ]]; then export TEST_MODE=true; else export TEST_MODE=false; fi
+              "${ROOT}/scripts/trust-config-backup.sh"
+            displayName: Trust config snapshot (AFTER)

@@ -1,0 +1,81 @@
+# GCP CAS Enterprise Client mTLS Lifecycle — Cloud Build (parity with GitHub Actions / ADO).
+#
+# Run from repo root:
+#   gcloud builds submit --config=cloudbuild/cert-lifecycle.yaml --project=YOUR_BUILD_PROJECT .
+#
+# Override any _SUBSTITUTION (comma-separated):
+#   gcloud builds submit --config=cloudbuild/cert-lifecycle.yaml \
+#     --substitutions=_ACTION=issue,_TEST_MODE=false,_COMMON_NAME=api-dev.example.com,... .
+#
+# IAM: grant the Cloud Build service account (or --service-account) roles on PKI + workload
+# projects equivalent to your automation SA (Private CA, GCS, Secret Manager, Certificate Manager).
+#
+# Substitutions beginning with _ are user-defined; defaults are placeholders only.
+timeout: 2400s
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _ACTION: issue
+  _TEST_MODE: "true"
+  _WORKLOAD_APP: sample-app
+  _WORKLOAD_ENV: dev
+  _WORKLOAD_PROJECT_ID: YOUR_WORKLOAD_PROJECT_ID
+  # Use __default__ for trust-config-{app}-{env}; otherwise set the Certificate Manager id
+  _TRUST_CONFIG_NAME: __default__
+  _COMMON_NAME: ""
+  _ORGANIZATIONAL_UNIT: ""
+  _VALIDITY_DAYS: "400"
+  _CERTIFICATE_ID: ""
+  _PKI_PROJECT_ID: YOUR_PKI_PROJECT_ID
+  _PKI_REGION: us-central1
+  _CA_POOL_ID: ca-pool-sub-example
+  _CA_ID: ca-sub-example-issuing-a
+  _CERT_TEMPLATE: tpl-client-example-v1
+  _STORAGE_BUCKET: YOUR_ARTIFACT_BUCKET
+  _ALLOWED_APPS: sample-app,sample-service
+  _MIN_VALIDITY_DAYS: "365"
+  _MAX_VALIDITY_DAYS: "730"
+  _MAX_VALIDITY_DAYS_PROD: "548"
+  _STRICT_VALIDITY_ENVS: prod
+  _MAINT_WINDOW_START_MONTH: "11"
+  _MAINT_WINDOW_END_MONTH: "1"
+  _MAINT_WINDOW_END_DAY: "7"
+
+steps:
+  - id: cert-lifecycle
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    env:
+      - "ACTION=${_ACTION}"
+      - "TEST_MODE=${_TEST_MODE}"
+      - "WORKLOAD_APP=${_WORKLOAD_APP}"
+      - "WORKLOAD_ENV=${_WORKLOAD_ENV}"
+      - "WORKLOAD_PROJECT_ID=${_WORKLOAD_PROJECT_ID}"
+      - "TRUST_CONFIG_NAME=${_TRUST_CONFIG_NAME}"
+      - "COMMON_NAME=${_COMMON_NAME}"
+      - "ORGANIZATIONAL_UNIT=${_ORGANIZATIONAL_UNIT}"
+      - "VALIDITY_DAYS=${_VALIDITY_DAYS}"
+      - "CERTIFICATE_ID=${_CERTIFICATE_ID}"
+      - "PKI_PROJECT_ID=${_PKI_PROJECT_ID}"
+      - "PKI_REGION=${_PKI_REGION}"
+      - "CA_POOL_ID=${_CA_POOL_ID}"
+      - "CA_ID=${_CA_ID}"
+      - "CERT_TEMPLATE=${_CERT_TEMPLATE}"
+      - "STORAGE_BUCKET=${_STORAGE_BUCKET}"
+      - "ALLOWED_APPS=${_ALLOWED_APPS}"
+      - "MIN_VALIDITY_DAYS=${_MIN_VALIDITY_DAYS}"
+      - "MAX_VALIDITY_DAYS=${_MAX_VALIDITY_DAYS}"
+      - "MAX_VALIDITY_DAYS_PROD=${_MAX_VALIDITY_DAYS_PROD}"
+      - "STRICT_VALIDITY_ENVS=${_STRICT_VALIDITY_ENVS}"
+      - "MAINT_WINDOW_START_MONTH=${_MAINT_WINDOW_START_MONTH}"
+      - "MAINT_WINDOW_END_MONTH=${_MAINT_WINDOW_END_MONTH}"
+      - "MAINT_WINDOW_END_DAY=${_MAINT_WINDOW_END_DAY}"
+    args:
+      - -ceu
+      - |
+        apt-get update -y
+        apt-get install -y --no-install-recommends python3-pip
+        rm -rf /var/lib/apt/lists/*
+        chmod +x scripts/cloudbuild-lifecycle.sh scripts/*.sh
+        ./scripts/cloudbuild-lifecycle.sh

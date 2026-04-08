@@ -1,0 +1,258 @@
+# GCP CAS Enterprise Client mTLS Lifecycle — reusable workflow (issue/revoke, allowlist, backup).
+# Call: uses: ./.github/workflows/cert-lifecycle-reusable.yaml
+name: GCP CAS Enterprise mTLS lifecycle (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      action:
+        description: issue or revoke
+        type: string
+        required: true
+      workload_app:
+        type: string
+        required: true
+      workload_env:
+        type: string
+        required: true
+      workload_project_id:
+        type: string
+        required: true
+      trust_config_name:
+        type: string
+        required: false
+        default: ""
+      common_name:
+        type: string
+        required: false
+        default: ""
+      organizational_unit:
+        type: string
+        required: false
+        default: ""
+      validity_days:
+        type: string
+        required: false
+        default: "400"
+      certificate_id:
+        type: string
+        required: false
+        default: ""
+      test_mode:
+        type: boolean
+        required: true
+      pki_project_id:
+        type: string
+        required: true
+      pki_region:
+        type: string
+        required: true
+      ca_pool_id:
+        type: string
+        required: true
+      ca_id:
+        type: string
+        required: true
+      cert_template:
+        type: string
+        required: true
+      storage_bucket:
+        type: string
+        required: true
+      allowed_apps:
+        type: string
+        required: true
+      min_validity_days:
+        type: string
+        required: true
+      max_validity_days:
+        type: string
+        required: true
+      max_validity_days_prod:
+        type: string
+        required: true
+      strict_validity_envs:
+        type: string
+        required: true
+      maint_window_start_month:
+        type: string
+        required: true
+      maint_window_end_month:
+        type: string
+        required: true
+      maint_window_end_day:
+        type: string
+        required: true
+    secrets:
+      GCP_SA_KEY:
+        description: Service account JSON for google-github-actions/auth (WIF requires changing the auth steps)
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  backup_before:
+    name: Backup trust config (before)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - env:
+          WORKLOAD_PROJECT_ID: ${{ inputs.workload_project_id }}
+          WORKLOAD_APP: ${{ inputs.workload_app }}
+          WORKLOAD_ENV: ${{ inputs.workload_env }}
+          STORAGE_BUCKET: ${{ inputs.storage_bucket }}
+          TRUST_CONFIG_NAME: ${{ inputs.trust_config_name }}
+          PHASE: before
+          TEST_MODE: ${{ inputs.test_mode }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/trust-config-backup.sh
+          if [[ "${TEST_MODE}" == "true" ]]; then export TEST_MODE=true; else export TEST_MODE=false; fi
+          scripts/trust-config-backup.sh
+
+  validate:
+    name: Policy checks
+    needs: backup_before
+    if: inputs.action == 'issue'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          WORKLOAD_APP: ${{ inputs.workload_app }}
+          WORKLOAD_ENV: ${{ inputs.workload_env }}
+          COMMON_NAME: ${{ inputs.common_name }}
+          ORGANIZATIONAL_UNIT: ${{ inputs.organizational_unit }}
+          VALIDITY_DAYS: ${{ inputs.validity_days }}
+          MIN_VALIDITY_DAYS: ${{ inputs.min_validity_days }}
+          MAX_VALIDITY_DAYS: ${{ inputs.max_validity_days }}
+          MAX_VALIDITY_DAYS_PROD: ${{ inputs.max_validity_days_prod }}
+          MAINT_WINDOW_START_MONTH: ${{ inputs.maint_window_start_month }}
+          MAINT_WINDOW_END_MONTH: ${{ inputs.maint_window_end_month }}
+          MAINT_WINDOW_END_DAY: ${{ inputs.maint_window_end_day }}
+          ALLOWED_APPS: ${{ inputs.allowed_apps }}
+          STRICT_VALIDITY_ENVS: ${{ inputs.strict_validity_envs }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/validate-cert-request.sh
+          scripts/validate-cert-request.sh
+
+  issue:
+    name: Issue and activate allowlist
+    needs: validate
+    if: inputs.action == 'issue'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - env:
+          PKI_PROJECT_ID: ${{ inputs.pki_project_id }}
+          PKI_REGION: ${{ inputs.pki_region }}
+          CA_POOL_ID: ${{ inputs.ca_pool_id }}
+          CA_ID: ${{ inputs.ca_id }}
+          CERT_TEMPLATE: ${{ inputs.cert_template }}
+          COMMON_NAME: ${{ inputs.common_name }}
+          ORGANIZATIONAL_UNIT: ${{ inputs.organizational_unit }}
+          VALIDITY_DAYS: ${{ inputs.validity_days }}
+          STORAGE_BUCKET: ${{ inputs.storage_bucket }}
+          WORKLOAD_APP: ${{ inputs.workload_app }}
+          WORKLOAD_ENV: ${{ inputs.workload_env }}
+          WORKLOAD_PROJECT_ID: ${{ inputs.workload_project_id }}
+          TRUST_CONFIG_NAME: ${{ inputs.trust_config_name }}
+          TEST_MODE: ${{ inputs.test_mode }}
+          CAS_STATE_DIR: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q -r scripts/requirements.txt
+          chmod +x scripts/issue-cert.sh
+          if [[ "${TEST_MODE}" == "true" ]]; then export TEST_MODE=true; else export TEST_MODE=false; fi
+          scripts/issue-cert.sh
+          if [[ "${TEST_MODE}" != "true" ]]; then
+            CERT_ID="$(cat "${GITHUB_WORKSPACE}/.cas-lifecycle-cert-id")"
+            PEM_LOCAL="$(mktemp)"
+            gsutil cp "gs://${STORAGE_BUCKET}/certificates/${WORKLOAD_APP}/${WORKLOAD_ENV}/${CERT_ID}.pem" "${PEM_LOCAL}"
+            TC_NAME="${TRUST_CONFIG_NAME:-trust-config-${WORKLOAD_APP}-${WORKLOAD_ENV}}"
+            python3 scripts/trust_config_allowlist.py add \
+              --workload-project "${WORKLOAD_PROJECT_ID}" \
+              --trust-config "${TC_NAME}" \
+              --pem-file "${PEM_LOCAL}"
+            python3 scripts/trust_config_allowlist.py cleanup-expired \
+              --workload-project "${WORKLOAD_PROJECT_ID}" \
+              --trust-config "${TC_NAME}"
+          fi
+
+  revoke:
+    name: Revoke certificate
+    needs: backup_before
+    if: inputs.action == 'revoke'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - env:
+          PKI_PROJECT_ID: ${{ inputs.pki_project_id }}
+          PKI_REGION: ${{ inputs.pki_region }}
+          CA_POOL_ID: ${{ inputs.ca_pool_id }}
+          CERTIFICATE_ID: ${{ inputs.certificate_id }}
+          STORAGE_BUCKET: ${{ inputs.storage_bucket }}
+          WORKLOAD_APP: ${{ inputs.workload_app }}
+          WORKLOAD_ENV: ${{ inputs.workload_env }}
+          WORKLOAD_PROJECT_ID: ${{ inputs.workload_project_id }}
+          TRUST_CONFIG_NAME: ${{ inputs.trust_config_name }}
+          TEST_MODE: ${{ inputs.test_mode }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q -r scripts/requirements.txt
+          chmod +x scripts/revoke-cert.sh
+          if [[ "${TEST_MODE}" == "true" ]]; then export TEST_MODE=true; else export TEST_MODE=false; fi
+          scripts/revoke-cert.sh
+
+  backup_after:
+    name: Backup trust config (after)
+    needs: [issue, revoke]
+    if: |
+      always() &&
+      (needs.issue.result == 'success' || needs.revoke.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - env:
+          WORKLOAD_PROJECT_ID: ${{ inputs.workload_project_id }}
+          WORKLOAD_APP: ${{ inputs.workload_app }}
+          WORKLOAD_ENV: ${{ inputs.workload_env }}
+          STORAGE_BUCKET: ${{ inputs.storage_bucket }}
+          TRUST_CONFIG_NAME: ${{ inputs.trust_config_name }}
+          PHASE: after
+          TEST_MODE: ${{ inputs.test_mode }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/trust-config-backup.sh
+          if [[ "${TEST_MODE}" == "true" ]]; then export TEST_MODE=true; else export TEST_MODE=false; fi
+          scripts/trust-config-backup.sh

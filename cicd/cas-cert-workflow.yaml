@@ -1,0 +1,111 @@
+# GCP CAS Enterprise Client mTLS Lifecycle (Azure DevOps entry pipeline)
+name: gcp-cas-emtls-$(Date:yyyyMMdd)$(Rev:.r)
+trigger: none
+lockBehavior: sequential
+
+parameters:
+  - name: action
+    displayName: Action
+    type: string
+    default: issue
+    values:
+      - issue
+      - revoke
+
+  - name: workloadApp
+    displayName: Workload application slug
+    type: string
+    default: sample-app
+    values:
+      - sample-app
+      - sample-service
+
+  - name: workloadEnv
+    displayName: Workload environment
+    type: string
+    default: dev
+    values:
+      - dev
+      - sandbox
+      - prod
+
+  - name: workloadProjectId
+    displayName: GCP project id where trust config and workloads run
+    type: string
+    default: YOUR_WORKLOAD_PROJECT_ID
+
+  - name: trustConfigName
+    displayName: Certificate Manager trust config id (leave empty for trust-config-{app}-{env})
+    type: string
+    default: ''
+
+  - name: commonName
+    displayName: Certificate subject CN (must include env token, e.g. api-dev.example.internal)
+    type: string
+    default: ''
+
+  - name: organizationalUnit
+    displayName: OU must be env-app (e.g. dev-sample-app)
+    type: string
+    default: ''
+
+  - name: validityDays
+    displayName: Lifetime in days
+    type: number
+    default: 400
+
+  - name: certificateId
+    displayName: Certificate id (revoke only)
+    type: string
+    default: ''
+
+  - name: testMode
+    displayName: If true, validation runs but no gcloud mutations
+    type: boolean
+    default: true
+
+variables:
+  pkiProjectId: 'YOUR_PKI_PROJECT_ID'
+  pkiRegion: 'us-central1'
+  caPoolId: 'ca-pool-sub-example'
+  caId: 'ca-sub-example-issuing-a'
+  certTemplate: 'tpl-client-example-v1'
+  storageBucket: 'YOUR_ARTIFACT_BUCKET'
+  gcpServiceConnection: 'GCP'
+  allowedApps: 'sample-app,sample-service'
+  minValidityDays: 365
+  maxValidityDays: 730
+  maxValidityDaysProd: 548
+  maintWindowStartMonth: 11
+  maintWindowEndMonth: 1
+  maintWindowEndDay: 7
+  strictValidityEnvs: 'prod'
+
+stages:
+  - template: templates/cas-cert-lifecycle.yaml
+    parameters:
+      action: ${{ parameters.action }}
+      workloadApp: ${{ parameters.workloadApp }}
+      workloadEnv: ${{ parameters.workloadEnv }}
+      workloadProjectId: ${{ parameters.workloadProjectId }}
+      trustConfigName: ${{ parameters.trustConfigName }}
+      commonName: ${{ parameters.commonName }}
+      organizationalUnit: ${{ parameters.organizationalUnit }}
+      validityDays: ${{ parameters.validityDays }}
+      certificateId: ${{ parameters.certificateId }}
+      pkiProjectId: $(pkiProjectId)
+      pkiRegion: $(pkiRegion)
+      caPoolId: $(caPoolId)
+      caId: $(caId)
+      certTemplate: $(certTemplate)
+      storageBucket: $(storageBucket)
+      gcpServiceConnection: $(gcpServiceConnection)
+      allowedApps: $(allowedApps)
+      minValidityDays: $(minValidityDays)
+      maxValidityDays: $(maxValidityDays)
+      maxValidityDaysProd: $(maxValidityDaysProd)
+      maintWindowStartMonth: $(maintWindowStartMonth)
+      maintWindowEndMonth: $(maintWindowEndMonth)
+      maintWindowEndDay: $(maintWindowEndDay)
+      strictValidityEnvs: $(strictValidityEnvs)
+      testMode: ${{ parameters.testMode }}

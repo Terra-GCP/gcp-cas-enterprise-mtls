@@ -1,0 +1,54 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local env and secrets (never commit real keys)
+.env
+.env.*
+
+# Certificate / key material from local runs
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Terraform CLI artifacts (any directory)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Repo-specific: keep example tfvars committed; real tfvars live only on disk
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+terraform/terraform.tfsecrets
+
+# Lifecycle scripts state (CI writes under workspace root)
+.cas-lifecycle-cert-id
+.cas-lifecycle-secret-id
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+
+# Cloud Build / local tools
+.gcloud/
+*.log

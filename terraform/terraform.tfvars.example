@@ -1,0 +1,45 @@
+project_id = "YOUR_PKI_PROJECT_ID"
+region     = "YOUR_REGION"
+
+# Optional: folders where workload projects live (Certificate Manager editor for lifecycle SA).
+trust_config_admin_folder_ids = [
+  "folders/YOUR_FOLDER_ID_DEV",
+  "folders/YOUR_FOLDER_ID_PROD",
+]
+
+root_ca_pool_name = "ca-pool-root-example"
+sub_ca_pool_name  = "ca-pool-sub-example"
+ca_pool_tier      = "ENTERPRISE"
+
+root_ca_id                  = "ca-root-example-a"
+root_ca_common_name         = "Example Root CA"
+root_ca_organization        = "Example Organization"
+root_ca_organizational_unit = "PKI"
+root_ca_country             = "US"
+root_ca_state               = "California"
+root_ca_locality            = "San Francisco"
+root_ca_lifetime_years      = 25
+root_ca_algorithm           = "EC_P384_SHA384"
+
+sub_ca_id                  = "ca-sub-example-issuing-a"
+sub_ca_common_name         = "Example Client Issuing CA"
+sub_ca_organization        = "Example Organization"
+sub_ca_organizational_unit = "Identity"
+sub_ca_country             = "US"
+sub_ca_state               = "California"
+sub_ca_locality            = "San Francisco"
+sub_ca_lifetime_years      = 10
+sub_ca_algorithm           = "EC_P384_SHA384"
+
+deletion_protection = true
+
+certificate_template_name = "tpl-client-example-v1"
+crl_bucket_name           = "YOUR_GLOBALLY_UNIQUE_CRL_BUCKET_NAME"
+
+cert_lifecycle_sa_account_id = "sa-cert-lifecycle"
+
+labels = {
+  managed_by = "terraform"
+  solution   = "gcp-cas-enterprise-mtls"
+  component  = "client-mtls-pki"
+}
